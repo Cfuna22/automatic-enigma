@@ -1,3 +1,6 @@
-myenv *
-.myenv
-myenv
+myvenv *
+.myvenv
+myvenv/
+.env
+env *
+env
