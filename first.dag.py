@@ -32,7 +32,7 @@ def extract_recent_tracks():
         ),
     )
     
-    access_token = response.json()[access_token]
+    access_token = response.json()["access_token"]
     
     headers = {
         "Authorization": f"Bearer {access_token}"
