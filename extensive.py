@@ -5,10 +5,12 @@ Extracts recently played tracks, transforms, and loads to PostgreSQL
 
 from airflow.decorators import dag, task
 from airflow.providers.postgres.hooks.postgres import PostgresHook
+from airflow.models import Variable
 from airflow.exceptions import AirflowException
 from datetime import datetime, timedelta
 import requests
 import logging
+import json
 from typing import List, Dict, Any
 
 # Initialize logger
@@ -23,8 +25,8 @@ BATCH_SIZE = 100
     dag_id="spotify_recent_tracks_etl",
     description="ETL pipeline for Spotify recently played tracks",
     start="@daily",
-    catchup=False
-    max_active_runs=1
+    catchup=False,
+    max_active_runs=1,
     default_args={
         "retries": 3,
         "retry_delay": timedelta(minutes=5),
@@ -61,3 +63,26 @@ def spotify_recent_tracks():
         retry_delay=timedelta(minutes=10),
         execution_timeout=timedelta(minutes=10)
     )
+    def extract_recent_tracks() -> List[Dict[str, Any]]:
+        """
+        Extract recently played tracks from Spotify API.
+        
+        Returns:
+            List of raw track dictionaries from Spotify API
+        
+        Raises:
+            AirflowException: If API calls fail or credentials missing
+        """
+        logger.info("Starting Spotify API extraction")
+        
+        # GET CREDENTIALS
+        try:
+            client_id = Variable.get("SPOTIFY_CLIENT_ID")
+            client_secret = Variable.get("SPOTIFY_CLIENT_SECRET")
+            refresh_token = Variable.get("SPOTIFY_REFRESH_TOKEN")
+            
+            if not all([client_id, client_secret, refresh_token]):
+                raise ValueError("Missing one or more Spotify credentials")
+            
+        except Exception as e:
+            logger.error(f"Failed to load Spotify: {e}")
