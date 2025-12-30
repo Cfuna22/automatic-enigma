@@ -85,4 +85,128 @@ def spotify_recent_tracks():
                 raise ValueError("Missing one or more Spotify credentials")
             
         except Exception as e:
-            logger.error(f"Failed to load Spotify: {e}")
+            logger.error(f"Failed to load Spotify credentials: {e}")
+            raise AirflowException(f"Spotify credentials error: {e}")
+        
+        # GET ACCESS TOKEN
+        logger.info("Requesting access token from Spotify")
+        try:
+            token_response = requests.post(
+                SPOTIFY_API_TOKEN_URL,
+                data={
+                    "grant_type": "refresh_token",
+                    "refresh_token": refresh_token
+                },
+                auth=(client_id, client_secret),
+                timeout=30
+            )
+            
+            # Check for HTTP errors
+            token_response.raise_for_status()
+            
+            token_data = token_response.json()
+            access_token = token_data.get("access_token")
+            
+            if not access_token:
+                raise ValueError("No access token in response")
+            
+            logger.info("Successfully obtained access token")
+            
+        except Exception as e:
+            logger.error(f"Token request failed: {e}")
+            
+            if hasattr(e, 'response') and e.response:
+                logger.error(f"Response status failed: {e.response.status_code}")
+                raise AirflowException(f"Spotify token request failed: {e}")
+            
+            # FETCH RECENT TRACKS
+            logger.info(f"Fetching recent tracks (limit: {DEFAULT_LIMIT})")
+            try:
+                headers = {
+                    "Authorization": f"Bearer {access_token}",
+                    "Content-Type": "application/json",
+                }
+                
+                params = {
+                    "limit": DEFAULT_LIMIT,
+                    "after": get_yesterday_timestamp()
+                }
+                
+                tracks_response = requests.get(
+                    SPOTIFY_RECENT_TRACKS_URL,
+                    headers=headers,
+                    params=params,
+                    timeout=30,
+                )
+                
+                tracks_response.raise_for_status()
+                tracks_data = tracks_response.json()
+                
+                items = tracks_data.get("items", [])
+                logger.info(f"Successfully extracted {len(items)} tracks")
+                
+                if items:
+                    sample = {
+                        "track": items[0]["track"]["name"],
+                        "artist": items[0]["track"]["artists"][0]["name"],
+                        "played_at": items[0]["played_at"],
+                    }
+                    logger.debug(f"Sample track {json.dumps(sample, indent=2)}")
+                    return items
+            except requests.exceptions.RequestException as e:
+                logger.error(f"Tracks request failed: {e}")
+                raise AirflowException(f"Spotify tracks request failed: {e}")
+            
+        # VALIDATE
+        @task(
+            task_is="validate_tracks",
+            retries=2,
+            retry_delay=timedelta(minutes=2),
+        )
+        def validate_tracks(raw_tracks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+            logger.info(f"Validating {len(raw_tracks)} tracks")
+            
+            if not raw_tracks:
+                logger.warning("No tracks to validate")
+                return []
+            
+            validate_tracks = []
+            validation_errors = []
+            
+            for i, item in enumerate(raw_tracks):
+                try:
+                    required_fields = [
+                        ("played_at", str),
+                        ("track", dict)
+                    ]
+                    for field_name, field_type in required_fields:
+                        if field_name not in item:
+                            raise ValueError(f"Missing field: {field_name}")
+                        if not isinstance(item[field_name], field_type):
+                            raise ValueError(f"Invalid type for {field_name}")
+                        
+                        track = item["track"]
+                        nested_required = [
+                            ("name", str),
+                            ("artists", list),
+                            ("album", dict),
+                            ("duration_ms", int)
+                        ]
+                        
+                        for field_name, field_type in nested_required:
+                            if field_name not in track:
+                                raise ValueError(f"Missing track field: {field_name}")
+                            if not isinstance(track[field_name], field_type):
+                                raise ValueError(f"Invalid type for track. {field_name}")
+                            
+                            # Validate artists list
+                            artists = track.get("artists", [])
+                            if not artists:
+                                logger.warning(f"Track {i} has empty artists list")
+                                
+                                validate_tracks.append(item)
+                                
+                except Exception as e:
+                    error_msg = f"Validation failed for track {i}: {e}"
+                    validation_errors.append(error_msg)
+                    logger.warning(error_msg)
