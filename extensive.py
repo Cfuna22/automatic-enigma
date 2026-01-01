@@ -210,3 +210,72 @@ def spotify_recent_tracks():
                     error_msg = f"Validation failed for track {i}: {e}"
                     validation_errors.append(error_msg)
                     logger.warning(error_msg)
+                    
+            if validation_errors:
+                logger.warning(f"Validation errors {len(validation_errors)} tracks failed")
+                for error in validation_errors[:5]:
+                    logger.debug(error)
+            logger.info(f"Validation complete {len(validate_tracks)} valid tracks")
+            return validate_tracks
+        
+        @task(
+            task_id="transform_tracks",
+            retries=2,
+        )
+        def transform_tracks(raw_tracks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+            logger.info(f"Transforming {len(raw_tracks)} tracks")
+            
+            if not raw_tracks:
+                logger.warning("No tracks to transform")
+                return []
+            
+            transformed = []
+            transformation_errors = []
+            
+            for i, item in enumerate(raw_tracks):
+                try:
+                    track = item["track"]
+                    
+                    artist_name = "Unknown Artist"
+                    artists = track.get("artists", [])
+                    if artists and isinstance(artists, list) and len(artists) > 0:
+                        first_artist = artists[0]
+                        if isinstance(first_artist, dict):
+                            artist_name = first_artist.get("name", "Unknown Artist")
+                            
+                            album_name = "Unknown Album"
+                            album = track.get("album", {})
+                            if isinstance(album, dict):
+                                album_name = album.get("name", "Unknown Album")
+                                
+                                transformed_record = {
+                                    "played_at": item["played_at"],
+                                    "track_name": track.get("name", "Unknown Track"),
+                                    "artist_name": artist_name,
+                                    "album_name": album_name,
+                                    "duration_ms": track.get("duration_ms", 0),
+                                    "track_id": track.get("id", ""),
+                                    "popularity": track.get("popularity", 0),
+                                    "explicit": track.get("explicit", False),
+                                    "extracted_at": datetime.now().isoformat(),
+                                }
+                                
+                                duration_ms = transformed_record["duration_ms"]
+                                transformed_record["duration_minutes"] = round(duration_ms / 60000, 2)
+                                transformed.append(transformed_record)
+                                
+                except Exception as e:
+                    error_msg = f"Transformation failed for track {i}: {e}"
+                    transformation_errors.append(error_msg)
+                    logger.error(error_msg, exc_info=True)
+                    
+            if transformation_errors:
+                logger.error(f"Transformation errors: {len(transformation_errors)}")
+                
+            logger.info(f"Transformation complete: {len(transformed)} tracks processed")
+            
+            if transformed:
+                logger.info(f"sample transformed record: {json.dumps(transformed[0], indent=2)}")
+                
+            return transformed
+        
